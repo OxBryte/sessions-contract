@@ -7,6 +7,8 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
 import {ISessions} from "./interfaces/ISessions.sol";
 
 contract Sessions is ISessions, ReentrancyGuard {
+    // ============ EVENTS ============
+    event UnclaimedRewardsWithdrawn(address indexed user, uint256 reward);
     // ============ CONTRACT CONFIGURATION ============
     /// @notice Project administration addresses
     address public owner;
@@ -44,7 +46,7 @@ contract Sessions is ISessions, ReentrancyGuard {
 
     // ============ ACCESS CONTROL MODIFIERS ============
     modifier onlyOwner() {
-        require(msg.sender == projectWallet, "Not authorized");
+        require(msg.sender == owner, "Not authorized");
         _;
     }
 
@@ -206,10 +208,9 @@ contract Sessions is ISessions, ReentrancyGuard {
      */
     function unlikeVideo(uint256 _videoId) external videoExists(_videoId) override nonReentrant() {
         require(likedBy[_videoId][msg.sender], "Cannot unlike video");
-
+        require(videos[_videoId].likes > 0, "No likes to remove");
         videos[_videoId].likes --;
         likedBy[_videoId][msg.sender] = false;
-
         emit VideoUnliked(_videoId, msg.sender);
     }
 
@@ -318,10 +319,9 @@ contract Sessions is ISessions, ReentrancyGuard {
      */
     function unfollowCreator( address _creator ) external nonReentrant() override {
         require(following[msg.sender][_creator], "Not following creator");
-
+        require(creators[_creator].totalFollowers > 0, "No followers to remove");
         following[msg.sender][_creator] = false;
         creators[_creator].totalFollowers --;
-
         emit CreatorUnfollowed(msg.sender, _creator);
     }
 
@@ -376,7 +376,7 @@ contract Sessions is ISessions, ReentrancyGuard {
         uint256 total = videoComments.length;
 
         if (offset >= total){
-            return videoComments;
+            return new Comment[](0);
         }
 
         uint256 end = offset + limit;
@@ -610,6 +610,7 @@ contract Sessions is ISessions, ReentrancyGuard {
     function _splitPayment(uint256 _amount, address _creator) internal {
         uint256 creatorShare = (_amount * creatorSharePercentage) / 100;
         uint256 minterShare = (_amount * minterSharePercentage) / 100;
+        uint256 projectShare = (_amount * projectSharePercentage) / 100;
 
         ( bool creatorSuccess, ) = payable(_creator).call{value: creatorShare}("");
         require(creatorSuccess, "Creator payment failed");
@@ -617,5 +618,7 @@ contract Sessions is ISessions, ReentrancyGuard {
         ( bool minterSuccess, ) = payable(msg.sender).call{value: minterShare}("");
         require(minterSuccess, "Minter payment failed");
 
+        ( bool projectSuccess, ) = payable(projectWallet).call{value: projectShare}("");
+        require(projectSuccess, "Project payment failed");
     }
 }

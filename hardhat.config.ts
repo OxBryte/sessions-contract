@@ -11,22 +11,26 @@ const config: HardhatUserConfig = {
     testnet: {
       // base sepolia
       url: `https://base-sepolia.infura.io/v3/${process.env.INFURA_API_KEY!}`,
-      accounts: [process.env.PRIVATE_KEY2!],
+      accounts: [process.env.PRIVATE_KEY!],
     },
     mainnet: {
       // base mainnet
       url: `https://base-mainnet.infura.io/v3/${process.env.INFURA_API_KEY!}`,
-      accounts: [process.env.PRIVATE_KEY1!],
+      accounts: [process.env.PRIVATE_KEY!],
     },
     sepolia: {
       // eth sepolia
       url: `https://sepolia.infura.io/v3/${process.env.INFURA_API_KEY!}`,
-      accounts: [process.env.PRIVATE_KEY1!],
+      accounts: [process.env.PRIVATE_KEY!],
     },
+  },
+  sourcify: {
+    enabled: true,
   },
   etherscan: {
     apiKey: {
       testnet: process.env.BASESCAN_API_KEY!,
+      base: process.env.BASESCAN_API_KEY!,
     },
     customChains: [
       {
