@@ -8,7 +8,7 @@ import {ISessions} from "./interfaces/ISessions.sol";
 
 contract Sessions is ISessions, ReentrancyGuard {
     // ============ EVENTS ============
-    event UnclaimedRewardsWithdrawn(address indexed user, uint256 reward);
+    event EmergencyPriceSet(uint256 emergencyPrice, bool useEmergency);
     // ============ CONTRACT CONFIGURATION ============
     /// @notice Project administration addresses
     address public owner;
@@ -166,9 +166,9 @@ contract Sessions is ISessions, ReentrancyGuard {
 
         require(video.totalMints < video.mintLimit, "Mint limit reached");
 
-        _splitPayment(msg.value, video.creator);
-
         video.totalMints ++;
+
+        _splitPayment(msg.value, video.creator);
 
         emit VideoMinted(_videoId, msg.sender, msg.value);
     }
@@ -275,14 +275,17 @@ contract Sessions is ISessions, ReentrancyGuard {
      * @param _creator The address of the creator to receive the tip
      * @custom:warning Tips are irreversible
      */
-    function tipCreator(address _creator) external payable override nonReentrant() {
+        function tipCreator(address _creator) external payable override nonReentrant() {
+        // CHECKS: Validate input parameters
         require(msg.value > 0, "Invalid tip amount");
         require(_creator != address(0), "Invalid creator address");
 
-        ( bool success, ) = payable(_creator).call{value: msg.value}("");
-        require(success, "Failed to tip creator");
+        // EFFECTS: Update state before external call
+        creators[_creator].totalTipsReceived += msg.value;
 
-        creators[_creator].totalTipsReceived += msg.value;  
+        // INTERACTIONS: Make external call after state changes
+        (bool success, ) = payable(_creator).call{value: msg.value}("");
+        require(success, "Failed to tip creator");
 
         emit CreatorTipped(msg.sender, _creator, msg.value);
     }
@@ -461,13 +464,42 @@ contract Sessions is ISessions, ReentrancyGuard {
      * 
      * @return uint256 The usd value of 1 ethereum converted to uint256
      */
+
+     /// @notice Maximum acceptable age for price data (3600 seconds = 1 hour)
+    /// @dev Using a constant makes the time window explicit and easily auditable
+    uint256 public constant MAX_PRICE_AGE = 3600; // 1 hour in seconds
+    
+    /// @notice Minimum acceptable block timestamp difference to prevent manipulation
+    /// @dev Miners can manipulate timestamps by ~15 seconds, so we account for this
+    uint256 public constant MIN_TIMESTAMP_BUFFER = 30; // 30 seconds buffer
+
+
     function getEthPrice() public view returns (uint256) {
-        (,int price,,uint256 updatedAt,) = priceFeed.latestRoundData();
+        (
+            uint80 roundId,
+            int256 price,
+            uint256 startedAt,
+            uint256 updatedAt,
+            uint80 answeredInRound
+        ) = priceFeed.latestRoundData();
+        
+        // Validate round data completeness
+        require(roundId > 0, "Invalid round ID");
+        require(answeredInRound >= roundId, "Stale price data");
 
-        require(block.timestamp - updatedAt < 1 hours, "Old price");
+        // Validate price is positive
         require(price > 0, "Invalid price from oracle");
+        
+        // Calculate time difference with consideration for potential timestamp manipulation
+        uint256 timeDifference = block.timestamp > updatedAt ? 
+            block.timestamp - updatedAt : 0;
+            
+        // Use generous time window to minimize impact of timestamp manipulation
+        // 1 hour window makes manipulation impact negligible
+        require(timeDifference < MAX_PRICE_AGE, "Price data too old");
 
-        return uint256(price) * 1e10; // chainlink uses 8 decimals
+        // Convert from 8 decimals (Chainlink) to 18 decimals (wei)
+        return uint256(price) * 1e10;
     }
 
     /**
@@ -480,6 +512,39 @@ contract Sessions is ISessions, ReentrancyGuard {
         uint256 fixedFeeInEth = usdcFee * 1e30 / ethPrice;
 
         return fixedFeeInEth;
+    }
+
+    // ============ EMERGENCY ADMIN FUNCTIONS ============
+    
+    /// @notice Emergency override price (only used if oracle fails)
+    uint256 private emergencyEthPrice;
+    bool private useEmergencyPrice;
+
+    /**
+     * @notice Emergency function to set ETH price if Chainlink oracle fails
+     * @dev Only callable by owner in emergency situations
+     *      Should only be used if Chainlink oracle is down for extended periods
+     * 
+     * @param _emergencyPrice ETH price in USD with 18 decimals
+     * @param _useEmergency Whether to use emergency price instead of oracle
+     */
+    function setEmergencyPrice(uint256 _emergencyPrice, bool _useEmergency) external onlyOwner {
+        require(_emergencyPrice > 0, "Invalid emergency price");
+        emergencyEthPrice = _emergencyPrice;
+        useEmergencyPrice = _useEmergency;
+        
+        emit EmergencyPriceSet(_emergencyPrice, _useEmergency);
+    }
+
+    /**
+     * @notice Get ETH price with emergency fallback
+     * @return uint256 ETH price in USD (18 decimals)
+     */
+    function getEthPriceWithFallback() public view returns (uint256) {
+        if (useEmergencyPrice) {
+            return emergencyEthPrice;
+        }
+        return getEthPrice();
     }
 
    // ============ ADMIN FUNCTONS ============
@@ -607,18 +672,21 @@ contract Sessions is ISessions, ReentrancyGuard {
      * @param _amount The payment amount (in wei)
      * @param _creator The wallet address of the token creator
      */
-    function _splitPayment(uint256 _amount, address _creator) internal {
+        function _splitPayment(uint256 _amount, address _creator) internal {
+        // CHECKS & EFFECTS: Calculate all amounts first (no state changes needed here)
         uint256 creatorShare = (_amount * creatorSharePercentage) / 100;
         uint256 minterShare = (_amount * minterSharePercentage) / 100;
         uint256 projectShare = (_amount * projectSharePercentage) / 100;
 
-        ( bool creatorSuccess, ) = payable(_creator).call{value: creatorShare}("");
+        // INTERACTIONS: Make all external calls
+        // Note: Order of calls doesn't matter since no state changes occur between them
+        (bool creatorSuccess, ) = payable(_creator).call{value: creatorShare}("");
         require(creatorSuccess, "Creator payment failed");
 
-        ( bool minterSuccess, ) = payable(msg.sender).call{value: minterShare}("");
+        (bool minterSuccess, ) = payable(msg.sender).call{value: minterShare}("");
         require(minterSuccess, "Minter payment failed");
 
-        ( bool projectSuccess, ) = payable(projectWallet).call{value: projectShare}("");
+        (bool projectSuccess, ) = payable(projectWallet).call{value: projectShare}("");
         require(projectSuccess, "Project payment failed");
     }
 }
